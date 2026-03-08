@@ -112,3 +112,5 @@ Filenames with spaces are supported — type the full name including spaces.
 - **BLE** uses the Nordic UART Service and is compatible with the LightBlue app (iOS/Android).
 - The hostname set by `sus network rename` is saved to `/config.json` on the Pico W and reapplied automatically on every boot.
 - Songs are stored in `/songs/` on the Pico W's flash. The `/songs/` folder is created automatically on first boot.
+- Also, I haven't tried this on pico without wireless support or pico 2.
+- Any feedback for future updates is recommended.
