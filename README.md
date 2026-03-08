@@ -1,6 +1,7 @@
 # SusOS
 
-A terminal-based OS for the Raspberry Pi Pico W, controlled from a browser over USB serial.
+A terminal-based OS for the Raspberry Pi Pico W, controlled from a browser over USB serial.<br>
+https://walkersea.github.io/SusOS-for-picoW/susos-terminal.html
 
 ---
 
