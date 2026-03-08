@@ -1,0 +1,1204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='4' fill='%230c0c0c'/><text x='50%25' y='50%25' dominant-baseline='central' text-anchor='middle' font-family='monospace' font-size='20' fill='%23c8c8c8'>$</text></svg>">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SusOS Terminal</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    background: #0c0c0c;
+    color: #c8c8c8;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+
+  /* ── Header ─────────────────────────────────────────────── */
+  #header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 5px 12px;
+    background: #141414;
+    border-bottom: 1px solid #2a2a2a;
+    flex-shrink: 0;
+    min-height: 30px;
+  }
+  #hd-left { display: flex; align-items: center; gap: 12px; }
+  #hd-title { color: #a0a0a0; font-size: 12px; letter-spacing: 0.05em; }
+  #hd-status { color: #505050; font-size: 11px; }
+  #hd-status.ok  { color: #6a9e6a; }
+  #hd-status.busy { color: #9e8a4a; }
+  #hd-right { display: flex; gap: 6px; align-items: center; }
+
+  button {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 11px;
+    background: #181818;
+    color: #a0a0a0;
+    border: 1px solid #303030;
+    padding: 3px 9px;
+    cursor: pointer;
+    user-select: none;
+    outline: none;
+  }
+  button:hover:not(:disabled) { background: #222; border-color: #484848; color: #c8c8c8; }
+  button:active:not(:disabled) { background: #2a2a2a; }
+  button:disabled { opacity: 0.3; cursor: not-allowed; }
+  #btn-connect          { color: #6a9e6a; border-color: #2e4a2e; }
+  #btn-connect:hover    { border-color: #3d6a3d; background: #1a221a; }
+  #btn-connect.disc     { color: #9e5050; border-color: #4a2020; }
+  #btn-connect.disc:hover { background: #1e1616; border-color: #6a2a2a; }
+
+  /* ── Terminal output ──────────────────────────────────────── */
+  #terminal {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 12px 4px 12px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.55;
+    cursor: text;
+    user-select: text;
+  }
+  #terminal::-webkit-scrollbar { width: 6px; }
+  #terminal::-webkit-scrollbar-track { background: #0c0c0c; }
+  #terminal::-webkit-scrollbar-thumb { background: #2a2a2a; }
+  #terminal::-webkit-scrollbar-thumb:hover { background: #3a3a3a; }
+
+  /* ── Input row ────────────────────────────────────────────── */
+  #input-row {
+    display: flex;
+    align-items: center;
+    padding: 4px 12px 5px;
+    border-top: 1px solid #1e1e1e;
+    background: #0c0c0c;
+    flex-shrink: 0;
+  }
+  #input-row span {
+    color: #505050;
+    margin-right: 6px;
+    flex-shrink: 0;
+    user-select: none;
+  }
+  #cmd-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #c8c8c8;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px;
+    caret-color: #c8c8c8;
+  }
+  #cmd-input::placeholder { color: #303030; }
+  #cmd-input:disabled { opacity: 0.4; }
+
+  /* ── Progress bar overlay ─────────────────────────────────── */
+  #progress-bar {
+    display: none;
+    height: 2px;
+    background: #1e1e1e;
+    flex-shrink: 0;
+  }
+  #progress-fill {
+    height: 100%;
+    background: #5a8a5a;
+    width: 0%;
+    transition: width 0.2s ease;
+  }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <div id="hd-left">
+    <span id="hd-title">SusOS Terminal</span>
+    <span id="hd-status">disconnected</span>
+  </div>
+  <div id="hd-right">
+    <button id="btn-connect"  onclick="toggleConnect()">Connect</button>
+    <button id="btn-install"  onclick="installOS()"     disabled>Install OS to Pico</button>
+    <button id="btn-rtttl"   onclick="importRTTTL()"   disabled>Import RTTTL</button>
+  </div>
+</div>
+
+<div id="progress-bar"><div id="progress-fill"></div></div>
+<div id="terminal" onclick="document.getElementById('cmd-input').focus()"></div>
+
+<div id="input-row">
+  <span>&gt;</span>
+  <input id="cmd-input" type="text"
+         autocomplete="off" autocorrect="off"
+         autocapitalize="off" spellcheck="false"
+         disabled
+         placeholder="connect to pico w to begin"
+         onkeydown="handleKey(event)" />
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════
+//  MICROPYTHON OS CODE  —  Written to /main.py on the Pico W
+// ═══════════════════════════════════════════════════════════════════
+const MAIN_PY = `# SusOS  -  main.py for Raspberry Pi Pico W
+import os, sys, gc, time, network, machine
+from machine import Pin, PWM, ADC
+
+# ----------------------------------------------------------------
+# RTTTL Player  (buzzer on GP15)
+# ----------------------------------------------------------------
+_NOTE = {
+    'C': 261, 'C#': 277, 'D': 293, 'D#': 311, 'E': 329,
+    'F': 349, 'F#': 369, 'G': 391, 'G#': 415, 'A': 440,
+    'A#': 466, 'B': 493, 'P': 0
+}
+_buz = PWM(Pin(15))
+_buz.duty_u16(0)
+
+def _note_freq(note, octave):
+    base = _NOTE.get(note.upper(), 0)
+    if base == 0:
+        return 0
+    return int(base * (2 ** (octave - 4)))
+
+def play_rtttl(s):
+    try:
+        parts = s.strip().split(':')
+        if len(parts) < 3:
+            print('Invalid RTTTL'); return
+        d, o, bpm = 4, 5, 120
+        for x in parts[1].split(','):
+            x = x.strip()
+            if x.startswith('d='):   d   = int(x[2:])
+            elif x.startswith('o='): o   = int(x[2:])
+            elif x.startswith('b='): bpm = int(x[2:])
+        whole = 4 * 60000 // bpm
+        for note_str in parts[2].split(','):
+            note_str = note_str.strip()
+            if not note_str:
+                continue
+            i = 0
+            ds = ''
+            while i < len(note_str) and note_str[i].isdigit():
+                ds += note_str[i]; i += 1
+            dur = int(ds) if ds else d
+            nt = ''
+            if i < len(note_str) and note_str[i].upper() in 'ABCDEFGP':
+                nt = note_str[i].upper(); i += 1
+                if i < len(note_str) and note_str[i] == '#':
+                    nt += '#'; i += 1
+            oc = o
+            if i < len(note_str) and note_str[i].isdigit():
+                oc = int(note_str[i]); i += 1
+            dot = (i < len(note_str) and note_str[i] == '.')
+            ms = whole // dur
+            if dot: ms = ms * 3 // 2
+            freq = _note_freq(nt, oc) if nt and nt != 'P' else 0
+            if freq:
+                _buz.freq(freq)
+                _buz.duty_u16(32768)
+            else:
+                _buz.duty_u16(0)
+            time.sleep_ms(int(ms * 9 // 10))
+            _buz.duty_u16(0)
+            time.sleep_ms(max(1, int(ms // 10)))
+    except Exception as e:
+        print('Sound error:', e)
+    finally:
+        _buz.duty_u16(0)
+
+# ----------------------------------------------------------------
+# BLE UART Peripheral  (compatible with LightBlue)
+# ----------------------------------------------------------------
+_ble = None
+_ble_tx_handle = None
+_ble_conn_handle = None
+_ble_rx_buf = []
+
+def _ble_adv_payload(name='SusPicoW'):
+    n = name.encode()
+    return bytes([2, 0x01, 0x06, len(n) + 1, 0x09]) + n
+
+def _init_ble():
+    global _ble, _ble_tx_handle
+    import bluetooth
+    B = bluetooth.BLE()
+    B.active(True)
+    U = bluetooth.UUID
+    TX = (U('6E400003-B5A3-F393-E0A9-E50E24DCCA9E'), bluetooth.FLAG_NOTIFY)
+    RX = (U('6E400002-B5A3-F393-E0A9-E50E24DCCA9E'), bluetooth.FLAG_WRITE)
+    SVC = (U('6E400001-B5A3-F393-E0A9-E50E24DCCA9E'), (TX, RX))
+    ((h_tx, h_rx),) = B.gatts_register_services((SVC,))
+
+    def irq(ev, data):
+        global _ble_conn_handle, _ble_rx_buf
+        if ev == 1:
+            _ble_conn_handle, _, _ = data
+            print('[BLE] Device connected')
+        elif ev == 2:
+            _ble_conn_handle = None
+            print('[BLE] Device disconnected')
+            B.gap_advertise(100000, _ble_adv_payload())
+        elif ev == 3:
+            _, vh = data
+            _ble_rx_buf.append(B.gatts_read(vh).decode('utf-8', 'ignore'))
+
+    B.irq(irq)
+    _ble = B
+    _ble_tx_handle = h_tx
+
+def cmd_ble_connect(name):
+    global _ble
+    try:
+        if _ble is None:
+            _init_ble()
+        _ble.gap_advertise(100000, _ble_adv_payload('SusPicoW'))
+        print('BLE advertising as: SusPicoW')
+        print('Open LightBlue and connect to SusPicoW')
+        print('Service: Nordic UART  (6E400001...)')
+    except Exception as e:
+        print('BLE error:', e)
+
+def cmd_ble_disconnect():
+    global _ble, _ble_conn_handle
+    if _ble:
+        try:
+            _ble.gap_advertise(None)
+            _ble.active(False)
+        except:
+            pass
+        _ble = None
+        _ble_conn_handle = None
+        print('BLE stopped')
+    else:
+        print('BLE not active')
+
+def cmd_ble_send(msg):
+    if _ble is None or _ble_conn_handle is None:
+        print('Not connected. Run: sus ble connect')
+        return
+    try:
+        _ble.gatts_notify(_ble_conn_handle, _ble_tx_handle, msg.encode())
+        print('Sent:', msg)
+    except Exception as e:
+        print('Send error:', e)
+
+def cmd_ble_receive():
+    global _ble_rx_buf
+    if _ble is None:
+        print('BLE not active. Run: sus ble connect')
+        return
+    print('Listening for BLE messages (10s)...')
+    _ble_rx_buf.clear()
+    got = False
+    t0 = time.ticks_ms()
+    while time.ticks_diff(time.ticks_ms(), t0) < 10000:
+        if _ble_rx_buf:
+            for m in _ble_rx_buf:
+                print('Received:', m)
+            _ble_rx_buf.clear()
+            got = True
+        time.sleep_ms(100)
+    if not got:
+        print('No messages received')
+
+# ----------------------------------------------------------------
+# Helpers
+# ----------------------------------------------------------------
+def _fmt(b):
+    if b < 1024:        return str(b) + 'B'
+    elif b < 1048576:   return str(b // 1024) + 'KB'
+    return str(b // 1048576) + 'MB'
+
+def _bar(used, total, width=20):
+    p = int(used / total * width) if total else 0
+    return '[' + '#' * p + 'x' * (width - p) + ']'
+
+def _pct(used, total):
+    return str(int(used / total * 100) if total else 0) + '%'
+
+# ----------------------------------------------------------------
+# System Commands
+# ----------------------------------------------------------------
+def cmd_sys_info():
+    u = os.uname()
+    print('OS          : SusOS')
+    print('Board       :', u.machine)
+    print('Firmware    :', u.version)
+    print('CPU Freq    :', str(machine.freq() // 1000000) + 'MHz')
+
+def cmd_sys_ram():
+    gc.collect()
+    total = gc.mem_alloc() + gc.mem_free()
+    used  = gc.mem_alloc()
+    print('Total RAM----------', _fmt(total))
+    print('Used   ---' + _bar(used, total) + '--' + _pct(used, total) + ' used')
+    print('Free   :', _fmt(gc.mem_free()))
+
+def cmd_sys_storage():
+    s = os.statvfs('/')
+    total = s[0] * s[2]
+    used  = total - s[0] * s[3]
+    print('Total Storage------', _fmt(total))
+    print('Used   ---' + _bar(used, total) + '--' + _pct(used, total) + ' used')
+    print('Free   :', _fmt(total - used))
+
+def cmd_sys_cpu():
+    print('CPU Freq :', str(machine.freq() // 1000000) + 'MHz')
+    print('(Real-time CPU usage not available on bare metal)')
+
+def cmd_sys_temp():
+    sensor  = ADC(4)
+    voltage = sensor.read_u16() * 3.3 / 65535
+    temp    = 27 - (voltage - 0.706) / 0.001721
+    print('Temperature:', str(round(temp, 1)) + 'C')
+
+# ----------------------------------------------------------------
+# Network Commands
+# ----------------------------------------------------------------
+wlan = network.WLAN(network.STA_IF)
+
+def cmd_net_scan():
+    wlan.active(True)
+    print('Scanning for networks (5s)...')
+    time.sleep(5)
+    nets = wlan.scan()
+    if not nets:
+        print('No networks found')
+        return
+    ssids = sorted(set(
+        n[0].decode('utf-8', 'ignore').strip()
+        for n in nets
+        if n[0].decode('utf-8', 'ignore').strip()
+    ))
+    print(str(len(ssids)) + ' network(s):')
+    for s in ssids:
+        print('  ' + s)
+
+def cmd_net_connect(ssid, pwd, att):
+    att = int(att)
+    wlan.active(True)
+    if wlan.isconnected():
+        wlan.disconnect()
+        time.sleep(1)
+    wlan.connect(ssid, pwd)
+    for a in range(att):
+        print('Attempt ' + str(a + 1) + '/' + str(att) + '...')
+        for _ in range(20):
+            if wlan.isconnected():
+                print('Connected!  IP:', wlan.ifconfig()[0])
+                return
+            time.sleep(0.5)
+    print('Failed to connect after', att, 'attempt(s)')
+
+def cmd_net_disconnect():
+    wlan.disconnect()
+    wlan.active(False)
+    print('Disconnected')
+
+def cmd_net_ping(host):
+    import socket
+    try:
+        addr = socket.getaddrinfo(host, 80)[0][-1]
+        s = socket.socket()
+        s.settimeout(3.0)
+        t0 = time.ticks_ms()
+        s.connect(addr)
+        ms = time.ticks_diff(time.ticks_ms(), t0)
+        s.close()
+        print('Reply from ' + str(addr[0]) + ': ' + str(ms) + 'ms  (TCP/80)')
+    except Exception as e:
+        print('Ping failed:', e)
+
+def cmd_net_rename(name):
+    try:
+        import ujson
+        # Persist to config so it survives reboot
+        try:
+            with open('/config.json') as _cf:
+                cfg = ujson.loads(_cf.read())
+        except:
+            cfg = {}
+        cfg['hostname'] = name
+        with open('/config.json', 'w') as _cf:
+            _cf.write(ujson.dumps(cfg))
+        wlan.active(True)
+        try:
+            wlan.config(dhcp_hostname=name)
+        except:
+            pass
+        try:
+            wlan.config(hostname=name)
+        except:
+            pass
+        print('Hostname set to:', name)
+        print('Saved to /config.json — will apply on next boot/reconnect')
+    except Exception as e:
+        print('Error:', e)
+
+def cmd_net_status():
+    print('Active    :', wlan.active())
+    print('Connected :', wlan.isconnected())
+    if wlan.isconnected():
+        ip, sn, gw, dns = wlan.ifconfig()
+        print('IP        :', ip)
+        print('Subnet    :', sn)
+        print('Gateway   :', gw)
+        print('DNS       :', dns)
+        try:    print('SSID      :', wlan.config('ssid'))
+        except: pass
+
+# ----------------------------------------------------------------
+# Sound Commands
+# ----------------------------------------------------------------
+def cmd_snd_list():
+    try:
+        songs = [f for f in os.listdir('/songs') if f.endswith('.rtttl')]
+        if not songs:
+            print('No songs in /songs')
+        else:
+            print(str(len(songs)) + ' song(s):')
+            for s in songs:
+                print('  ' + s)
+    except:
+        print('Songs folder not found')
+
+def cmd_snd_play(name):
+    if not name.endswith('.rtttl'):
+        name += '.rtttl'
+    try:
+        with open('/songs/' + name) as f:
+            data = f.read()
+        print('Playing:', name)
+        play_rtttl(data)
+        print('Done')
+    except OSError:
+        print('File not found:', name)
+    except Exception as e:
+        print('Error:', e)
+
+def cmd_snd_delete(name):
+    if not name.endswith('.rtttl'):
+        name += '.rtttl'
+    try:
+        os.remove('/songs/' + name)
+        print('Deleted:', name)
+    except OSError:
+        print('File not found:', name)
+
+# ----------------------------------------------------------------
+# Help
+# ----------------------------------------------------------------
+def cmd_help():
+    print("""SusOS  -  Command Reference
+---------------------------------
+sus system info              System information
+sus system ram               RAM usage
+sus system storage           Storage usage
+sus system cpu               CPU information
+sus system temperature       Built-in temperature sensor
+
+sus network scan             Scan for WiFi networks (5s)
+sus network connect <ssid> <password> <attempts>
+sus network disconnect       Disconnect from WiFi
+sus network ping <host>      Ping an IP address or URL
+sus network rename <name>    Set device hostname
+sus network status           Show network status
+
+sus ble connect <name>       Start BLE advertising (LightBlue)
+sus ble disconnect           Stop BLE
+sus ble send <message>       Send message via BLE UART
+sus ble receive              Listen for BLE messages (10s)
+
+sus sound play <file>        Play an RTTTL song
+sus sound list               List songs in /songs
+sus sound delete <file>      Delete a song from /songs
+
+sus help                     Show this help""")
+
+# ----------------------------------------------------------------
+# Command Processor
+# ----------------------------------------------------------------
+def process(cmd):
+    p = cmd.strip().split()
+    if not p:
+        return
+    if p[0] != 'sus':
+        print("Unknown command. Type 'sus help'")
+        return
+    if len(p) < 2:
+        print("Usage: sus <command>")
+        return
+    g = p[1]
+
+    if g == 'help':
+        cmd_help()
+
+    elif g == 'system':
+        if len(p) < 3:
+            print("Usage: sus system <info|ram|storage|cpu|temperature>")
+            return
+        s = p[2]
+        if   s == 'info':        cmd_sys_info()
+        elif s == 'ram':         cmd_sys_ram()
+        elif s == 'storage':     cmd_sys_storage()
+        elif s == 'cpu':         cmd_sys_cpu()
+        elif s == 'temperature': cmd_sys_temp()
+        else: print('Unknown system subcommand:', s)
+
+    elif g == 'network':
+        if len(p) < 3:
+            print("Usage: sus network <scan|connect|disconnect|ping|rename|status>")
+            return
+        s = p[2]
+        if   s == 'scan':       cmd_net_scan()
+        elif s == 'connect':
+            if len(p) < 5:
+                print("Usage: sus network connect <ssid> <password> <attempts>")
+                return
+            cmd_net_connect(p[3], p[4], int(p[5]) if len(p) > 5 else 3)
+        elif s == 'disconnect': cmd_net_disconnect()
+        elif s == 'ping':
+            if len(p) < 4:
+                print("Usage: sus network ping <host>")
+                return
+            cmd_net_ping(p[3])
+        elif s == 'rename':
+            if len(p) < 4:
+                print("Usage: sus network rename <name>")
+                return
+            cmd_net_rename(p[3])
+        elif s == 'status':     cmd_net_status()
+        else: print('Unknown network subcommand:', s)
+
+    elif g == 'ble':
+        if len(p) < 3:
+            print("Usage: sus ble <connect|disconnect|send|receive>")
+            return
+        s = p[2]
+        if   s == 'connect':    cmd_ble_connect(p[3] if len(p) > 3 else 'SusPicoW')
+        elif s == 'disconnect': cmd_ble_disconnect()
+        elif s == 'send':
+            if len(p) < 4:
+                print("Usage: sus ble send <message>")
+                return
+            cmd_ble_send(' '.join(p[3:]))
+        elif s == 'receive':    cmd_ble_receive()
+        else: print('Unknown ble subcommand:', s)
+
+    elif g == 'sound':
+        if len(p) < 3:
+            print("Usage: sus sound <play|list|delete>")
+            return
+        s = p[2]
+        if   s == 'list':   cmd_snd_list()
+        elif s == 'play':
+            if len(p) < 4:
+                print("Usage: sus sound play <filename>")
+                return
+            cmd_snd_play(' '.join(p[3:]))
+        elif s == 'delete':
+            if len(p) < 4:
+                print("Usage: sus sound delete <filename>")
+                return
+            cmd_snd_delete(' '.join(p[3:]))
+        else: print('Unknown sound subcommand:', s)
+
+    else:
+        print("Unknown command group. Type 'sus help'")
+
+# ----------------------------------------------------------------
+# Startup
+# ----------------------------------------------------------------
+try:
+    os.mkdir('/songs')
+except:
+    pass
+
+# Load persisted config (hostname etc.)
+try:
+    import ujson as _j
+    with open('/config.json') as _cf:
+        _cfg = _j.loads(_cf.read())
+    _hn = _cfg.get('hostname', '')
+    if _hn:
+        wlan.active(True)
+        try:
+            wlan.config(dhcp_hostname=_hn)
+        except:
+            pass
+        try:
+            wlan.config(hostname=_hn)
+        except:
+            pass
+        print('Hostname:', _hn)
+except:
+    pass
+
+print()
+print('SusOS')
+print('Raspberry Pi Pico W')
+print("Type 'sus help' for commands")
+print()
+
+# Startup sound: look for a file with 'startup' in the name, else play default
+_played = False
+try:
+    _sl = [f for f in os.listdir('/songs') if 'startup' in f.lower() and f.endswith('.rtttl')]
+    if _sl:
+        with open('/songs/' + _sl[0]) as _f:
+            play_rtttl(_f.read())
+        _played = True
+except:
+    pass
+
+if not _played:
+    try:
+        play_rtttl('SusOS:d=8,o=5,b=220:c,e,g,4c6')
+    except:
+        pass
+
+# ----------------------------------------------------------------
+# Main Loop  — KeyboardInterrupt is NOT caught here so that
+# Ctrl+C from the terminal app can escape back to MicroPython
+# REPL, which is required for raw-REPL file transfer.
+# ----------------------------------------------------------------
+while True:
+    try:
+        sys.stdout.write('$ ')
+        line = sys.stdin.readline()
+        if line.strip():
+            process(line.strip())
+    except Exception as e:
+        print('Error:', e)
+`;
+
+// ═══════════════════════════════════════════════════════════════════
+//  STATE
+// ═══════════════════════════════════════════════════════════════════
+let port        = null;
+let connected   = false;
+let busy        = false;
+let dataHandlers = [];     // stack: top handler gets serial data first
+let cmdHistory  = [];
+let histIdx     = -1;
+
+const termEl      = document.getElementById('terminal');
+const inputEl     = document.getElementById('cmd-input');
+const statusEl    = document.getElementById('hd-status');
+const connectBtn  = document.getElementById('btn-connect');
+const installBtn  = document.getElementById('btn-install');
+const rtttlBtn    = document.getElementById('btn-rtttl');
+const progressBar = document.getElementById('progress-bar');
+const progressFill= document.getElementById('progress-fill');
+
+// ═══════════════════════════════════════════════════════════════════
+//  TERMINAL OUTPUT
+// ═══════════════════════════════════════════════════════════════════
+function tprint(text) {
+    termEl.textContent += text;
+    termEl.scrollTop = termEl.scrollHeight;
+}
+function tprintln(text) { tprint(text + '\n'); }
+
+// ═══════════════════════════════════════════════════════════════════
+//  SERIAL CONNECTION
+// ═══════════════════════════════════════════════════════════════════
+async function toggleConnect() {
+    if (connected) { await doDisconnect(); }
+    else           { await doConnect(); }
+}
+
+async function doConnect() {
+    if (!('serial' in navigator)) {
+        tprintln('[Error] Web Serial API not supported. Use Chrome or Edge.');
+        return;
+    }
+    try {
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 115200 });
+        connected = true;
+        setUI(true);
+        tprintln('[serial connected at 115200 baud]');
+        tprintln('[type sus help for commands, ctrl+c to interrupt, ctrl+l to clear]');
+        tprint('\n');
+        startReadLoop();
+    } catch (e) {
+        if (e.name !== 'NotFoundError') {
+            tprintln('[connect error: ' + e.message + ']');
+        }
+    }
+}
+
+async function doDisconnect() {
+    connected = false;
+    dataHandlers = [];
+    _lastCmd = ''; _promptBuf = ''; _replWarnShown = false; _susOSRunning = false;
+    try {
+        if (port && port.readable) {
+            const r = port.readable.getReader();
+            await r.cancel().catch(() => {});
+            r.releaseLock();
+        }
+    } catch(e) {}
+    try {
+        if (port && port.writable) {
+            const w = port.writable.getWriter();
+            await w.close().catch(() => {});
+            w.releaseLock();
+        }
+    } catch(e) {}
+    try { if (port) await port.close(); } catch(e) {}
+    port = null;
+    setUI(false);
+    tprintln('[disconnected]');
+}
+
+function setUI(conn) {
+    statusEl.textContent = conn ? (busy ? 'busy' : 'connected') : 'disconnected';
+    statusEl.className   = conn ? (busy ? 'busy' : 'ok') : '';
+    connectBtn.textContent = conn ? 'Disconnect' : 'Connect';
+    connectBtn.className   = conn ? 'disc' : '';
+    installBtn.disabled = !conn || busy;
+    rtttlBtn.disabled   = !conn || busy;
+    inputEl.disabled    = !conn || busy;
+    inputEl.placeholder = conn ? '' : 'connect to pico w to begin';
+    if (conn && !busy) inputEl.focus();
+}
+
+function setBusy(b) {
+    busy = b;
+    setUI(connected);
+    progressBar.style.display = b ? 'block' : 'none';
+    if (!b) progressFill.style.width = '0%';
+}
+
+function setProgress(pct) {
+    progressFill.style.width = pct + '%';
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  READ LOOP  (routes incoming data to handler stack)
+// ═══════════════════════════════════════════════════════════════════
+
+// Last command sent — used to strip REPL echo so text doesn't appear twice
+let _lastCmd = '';
+// Rolling buffer for detecting prompts (last ~40 chars of serial output)
+let _promptBuf = '';
+let _replWarnShown = false;
+let _susOSRunning = false;
+
+function _processSerialText(text) {
+    _promptBuf = (_promptBuf + text).slice(-40);
+
+    // Detect plain MicroPython >>> — SusOS not installed/running
+    if (!_replWarnShown && !busy && />>>\s*$/.test(_promptBuf)) {
+        _replWarnShown = true;
+        tprintln('');
+        tprintln('[!] MicroPython REPL detected — SusOS is not installed or not running.');
+        tprintln('[!] Click [Install OS to Pico] then reconnect.');
+        tprintln('');
+    }
+
+    // Detect SusOS prompt ($ )
+    if (/\$ $/.test(_promptBuf)) {
+        _susOSRunning = true;
+        _replWarnShown = false;
+    }
+
+    // Strip the REPL echo of our own command to avoid printing it twice.
+    // When SusOS main.py runs its own readline() there is no echo, so this
+    // only triggers when accidentally in raw MicroPython mode.
+    if (_lastCmd && text.includes(_lastCmd)) {
+        text = text.replace(_lastCmd, '');
+        _lastCmd = '';
+    }
+
+    if (text) tprint(text);
+}
+
+async function startReadLoop() {
+    const decoder = new TextDecoder();
+    while (connected && port && port.readable) {
+        let reader;
+        try {
+            reader = port.readable.getReader();
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                const text = decoder.decode(value, { stream: true });
+                if (dataHandlers.length > 0) {
+                    dataHandlers[dataHandlers.length - 1](text);
+                } else {
+                    _processSerialText(text);
+                }
+            }
+        } catch (e) {
+            if (connected) tprintln('\n[read error: ' + e.message + ']');
+        } finally {
+            try { if (reader) reader.releaseLock(); } catch(e) {}
+        }
+        if (!connected) break;
+        await sleep(50);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  LOW-LEVEL WRITE
+// ═══════════════════════════════════════════════════════════════════
+async function write(data) {
+    if (!port || !port.writable) return;
+    const writer = port.writable.getWriter();
+    try {
+        if (typeof data === 'string') {
+            await writer.write(new TextEncoder().encode(data));
+        } else {
+            await writer.write(data);
+        }
+    } finally {
+        writer.releaseLock();
+    }
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ═══════════════════════════════════════════════════════════════════
+//  RAW REPL UTILITIES
+// ═══════════════════════════════════════════════════════════════════
+
+// Push a handler that accumulates data and resolves when pattern seen
+function waitForData(pattern, timeout = 15000) {
+    return new Promise((resolve, reject) => {
+        let buf = '';
+        const timer = setTimeout(() => {
+            const idx = dataHandlers.indexOf(handler);
+            if (idx !== -1) dataHandlers.splice(idx, 1);
+            reject(new Error('Timeout waiting for: ' + JSON.stringify(pattern)));
+        }, timeout);
+
+        function handler(data) {
+            buf += data;
+            if (buf.includes(pattern)) {
+                clearTimeout(timer);
+                const idx = dataHandlers.indexOf(handler);
+                if (idx !== -1) dataHandlers.splice(idx, 1);
+                resolve(buf);
+            }
+        }
+        dataHandlers.push(handler);
+    });
+}
+
+// Discard data for a fixed time (flush buffer)
+async function flushFor(ms) {
+    const sink = () => {};
+    dataHandlers.push(sink);
+    await sleep(ms);
+    const idx = dataHandlers.indexOf(sink);
+    if (idx !== -1) dataHandlers.splice(idx, 1);
+}
+
+async function enterRawRepl() {
+    // ── Step 1: drain any junk that is already in the pipe ──────────
+    const drainSink = () => {};
+    dataHandlers.push(drainSink);
+    await write('\r\n');
+    await sleep(100);
+
+    // Send Ctrl+C several times to kill any running user code
+    for (let i = 0; i < 5; i++) {
+        await write('\x03');
+        await sleep(120);
+    }
+    // Remove drain sink – from here on we want to capture responses
+    const di = dataHandlers.indexOf(drainSink);
+    if (di !== -1) dataHandlers.splice(di, 1);
+
+    // ── Step 2: enter raw REPL – register handler BEFORE write ──────
+    // MicroPython responds with "raw REPL; CTRL-B to exit\r\n>"
+    for (let attempt = 1; attempt <= 4; attempt++) {
+        const p = waitForData('raw REPL', 4000);
+        await write('\x01');          // Ctrl+A
+        try {
+            await p;
+            await sleep(150);
+            return;                   // success
+        } catch (_) {
+            tprintln('[raw REPL attempt ' + attempt + ' failed, retrying...]');
+            // Kick the board again before next try
+            for (let i = 0; i < 3; i++) {
+                await write('\x03');
+                await sleep(150);
+            }
+        }
+    }
+    throw new Error('Could not enter raw REPL. Make sure MicroPython is flashed and the Pico W is connected.');
+}
+
+async function execRaw(code) {
+    // IMPORTANT: register the response handler BEFORE writing,
+    // otherwise fast execution means the response arrives before
+    // we are listening and is silently dropped.
+    const p = waitForData('\x04\x04>', 30000);
+    await write(code + '\x04');      // Ctrl+D executes the block
+    const result = await p;
+
+    // Protocol: OK<stdout>\x04<stderr>\x04>
+    const okIdx = result.indexOf('OK');
+    if (okIdx === -1) throw new Error('No OK from raw REPL – board may not be in raw REPL mode');
+    const after  = result.slice(okIdx + 2);
+    const segs   = after.split('\x04');
+    const stderr = (segs[1] || '').trim();
+    if (stderr && /Error|Traceback/.test(stderr)) {
+        throw new Error('MicroPython: ' + stderr);
+    }
+    return (segs[0] || '').trim();
+}
+
+async function exitRawRepl() {
+    await write('\x02');             // Ctrl+B → friendly REPL
+    await sleep(400);
+}
+
+async function softReset() {
+    // In normal REPL mode Ctrl+D is soft reset;
+    // send it and wait briefly for the boot banner
+    await write('\x04');
+    await sleep(500);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  FILE UPLOAD  (hex-encoded — no base64 padding issues)
+// ═══════════════════════════════════════════════════════════════════
+function toHex(bytes) {
+    const out = [];
+    for (let i = 0; i < bytes.length; i++) {
+        out.push(bytes[i].toString(16).padStart(2, '0'));
+    }
+    return out.join('');
+}
+
+async function uploadFile(remotePath, content) {
+    const bytes = new TextEncoder().encode(content);
+    const hex   = toHex(bytes);
+
+    // 128 bytes = 256 hex chars per chunk.
+    // unhexlify uses only 0-9a-f — no padding, no ambiguity.
+    const HEX_PER_CHUNK = 256;
+    const chunks = [];
+    for (let i = 0; i < hex.length; i += HEX_PER_CHUNK) {
+        chunks.push(hex.slice(i, i + HEX_PER_CHUNK));
+    }
+
+    tprintln('[uploading ' + remotePath + ' (' + bytes.length + 'B in ' + chunks.length + ' chunks)]');
+
+    // Wipe / create the file
+    await execRaw("f=open('" + remotePath + "','wb')\nf.close()");
+
+    for (let i = 0; i < chunks.length; i++) {
+        const code = [
+            "import ubinascii as _u",
+            "f=open('" + remotePath + "','ab')",
+            "f.write(_u.unhexlify('" + chunks[i] + "'))",
+            "f.close()"
+        ].join('\n');
+        await execRaw(code);
+        const pct = Math.round((i + 1) / chunks.length * 100);
+        setProgress(pct);
+        if ((i + 1) % 20 === 0 || i + 1 === chunks.length) {
+            tprintln('  [' + (i + 1) + '/' + chunks.length + '  ' + pct + '%]');
+        }
+    }
+
+    // Verify exact byte count
+    const reported = await execRaw("import os\nprint(os.stat('" + remotePath + "')[6])");
+    const got = parseInt(reported.trim(), 10);
+    if (got !== bytes.length) {
+        throw new Error('Size mismatch: expected ' + bytes.length + 'B got ' + got + 'B — try again');
+    }
+    tprintln('[' + remotePath + ' verified ' + got + 'B OK]');
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  INSTALL OS
+// ═══════════════════════════════════════════════════════════════════
+async function installOS() {
+    if (!confirm(
+        'Install SusOS onto the Pico W?\n\n' +
+        'This will overwrite /main.py.\n\n' +
+        'Requirements:\n' +
+        '  - MicroPython firmware must already be on the Pico W\n' +
+        '  - Buzzer on GP15 for sound\n\n' +
+        'Proceed?'
+    )) return;
+
+    setBusy(true);
+    tprintln('');
+    tprintln('[--- Installing SusOS v1.0 ---]');
+
+    try {
+        await enterRawRepl();
+        tprintln('[raw REPL ready]');
+
+        // Ensure /songs directory exists
+        await execRaw([
+            "import os",
+            "try:",
+            "    os.mkdir('/songs')",
+            "except OSError:",
+            "    pass"
+        ].join('\n'));
+        tprintln('[/songs directory ready]');
+
+        // Upload main.py
+        await uploadFile('/main.py', MAIN_PY);
+
+        await exitRawRepl();
+        tprintln('[exiting raw REPL]');
+        await sleep(300);
+
+        tprintln('[soft resetting Pico W...]');
+        await softReset();
+
+        tprintln('');
+        tprintln('[--- Installation complete ---]');
+        tprintln('[SusOS is starting on the Pico W]');
+        tprintln('');
+
+    } catch (e) {
+        tprintln('[install error: ' + e.message + ']');
+        try { await exitRawRepl(); } catch(_) {}
+    } finally {
+        setBusy(false);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  IMPORT RTTTL FILE
+// ═══════════════════════════════════════════════════════════════════
+async function importRTTTL() {
+    const fileInput = document.createElement('input');
+    fileInput.type   = 'file';
+    fileInput.accept = '.rtttl,.txt';
+
+    fileInput.onchange = async () => {
+        const file = fileInput.files[0];
+        if (!file) return;
+
+        const fileReader = new FileReader();
+        fileReader.onload = async (e) => {
+            const content = e.target.result;
+            // Ensure .rtttl extension
+            let name = file.name;
+            if (!name.toLowerCase().endsWith('.rtttl')) {
+                name = name.replace(/\.[^.]+$/, '') + '.rtttl';
+            }
+            const remotePath = '/songs/' + name;
+
+            setBusy(true);
+            tprintln('');
+            tprintln('[--- Importing ' + name + ' ---]');
+
+            try {
+                await enterRawRepl();
+                tprintln('[raw REPL ready]');
+
+                // Ensure /songs exists
+                await execRaw([
+                    "import os",
+                    "try:",
+                    "    os.mkdir('/songs')",
+                    "except OSError:",
+                    "    pass"
+                ].join('\n'));
+
+                await uploadFile(remotePath, content);
+
+                await exitRawRepl();
+                await sleep(200);
+                await softReset();
+
+                tprintln('[--- Import complete: ' + name + ' ---]');
+                tprintln('');
+
+            } catch (e) {
+                tprintln('[import error: ' + e.message + ']');
+                try { await exitRawRepl(); } catch(_) {}
+            } finally {
+                setBusy(false);
+            }
+        };
+        fileReader.readAsText(file);
+    };
+
+    fileInput.click();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  KEYBOARD INPUT
+// ═══════════════════════════════════════════════════════════════════
+function handleKey(e) {
+    if (busy) { e.preventDefault(); return; }
+
+    if (e.key === 'Enter') {
+        const cmd = inputEl.value;
+        if (cmd !== '') {
+            cmdHistory.unshift(cmd);
+            if (cmdHistory.length > 200) cmdHistory.pop();
+        }
+        histIdx = -1;
+        inputEl.value = '';
+
+        // Echo locally so the command is visible on the same line as "$ "
+        // Record it so _processSerialText can strip the REPL's own echo
+        // (only fires when SusOS isn't running and we're in raw REPL mode)
+        _lastCmd = cmd;
+        tprint(cmd + '\n');
+        write(cmd + '\r\n');
+        e.preventDefault();
+
+    } else if (e.key === 'ArrowUp') {
+        if (histIdx < cmdHistory.length - 1) {
+            histIdx++;
+            inputEl.value = cmdHistory[histIdx];
+            setTimeout(() => inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length), 0);
+        }
+        e.preventDefault();
+
+    } else if (e.key === 'ArrowDown') {
+        if (histIdx > 0) {
+            histIdx--;
+            inputEl.value = cmdHistory[histIdx];
+        } else if (histIdx === 0) {
+            histIdx = -1;
+            inputEl.value = '';
+        }
+        e.preventDefault();
+
+    } else if (e.ctrlKey && e.key === 'c') {
+        write('\x03');
+        tprint('^C\n');
+        e.preventDefault();
+
+    } else if (e.ctrlKey && e.key === 'l') {
+        termEl.textContent = '';
+        e.preventDefault();
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  STARTUP MESSAGE
+// ═══════════════════════════════════════════════════════════════════
+(function init() {
+    tprintln('SusOS Terminal');
+    tprintln('Connect to Pico W via USB, then click [Install OS to Pico] if first time.');
+    tprintln('');
+})();
+</script>
+</body>
+</html>
